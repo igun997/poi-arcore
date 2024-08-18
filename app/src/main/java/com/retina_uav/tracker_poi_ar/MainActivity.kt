@@ -1,18 +1,20 @@
 package com.retina_uav.tracker_poi_ar
 
+
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
-import android.service.controls.ControlsProviderService.TAG
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.isGone
-import androidx.core.view.isVisible
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.ar.core.Anchor
 import com.google.ar.core.Earth
-import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
 import io.github.sceneview.ar.ArSceneView
 import io.github.sceneview.ar.arcore.createAnchor
@@ -25,7 +27,11 @@ import io.github.sceneview.math.Scale
 import io.github.sceneview.node.ViewNode
 import io.github.sceneview.utils.doOnApplyWindowInsets
 import io.github.sceneview.utils.setFullScreen
-import kotlin.math.*
+import kotlin.math.asin
+import kotlin.math.cos
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 
 class MainActivity : AppCompatActivity(R.layout.activity_main) {
@@ -45,6 +51,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private var sizeModel: Float = 1.8f
     private var isStart: Boolean = false
+    private val LOCATION_PERMISSION_REQUEST_CODE = 1
+    private val CAMERA_PERMISSION_REQUEST_CODE = 2
 
     data class Model(
         val fileLocation: String,
@@ -59,7 +67,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     )
 
     private val marker_model = Model(
-        fileLocation = "marker.glb",
+        fileLocation = "bottle.glb",
         scaleUnits = 1f,
         placementMode = PlacementMode.BEST_AVAILABLE,
         applyPoseRotation = false
@@ -75,7 +83,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        // Check for location permissions
+        if (!hasLocationPermission()) {
+            requestLocationPermission()
+        }
+        if (!hasCameraPermission()) {
+            requestCameraPermission()
+        }
         setFullScreen(
             findViewById(R.id.rootView),
             fullScreen = true,
@@ -124,12 +138,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 if (it.trackingState == TrackingState.TRACKING)
                     updateGeospatialPoseText(it)
                 else
-                    geospatialPoseText.text = it.earthState.toString() + " - " + it.trackingState.toString()
+                    geospatialPoseText.text =
+                        it.earthState.toString() + " - " + it.trackingState.toString()
             } ?: run {
                 earth = sceneView.arSession?.earth!!
             }
 
-            if(isStart) {
+            if (isStart) {
                 updateARText()
             }
         })
@@ -148,7 +163,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 val lon2 = myCurrentPOI.longitude
 
                 arText.text = "Dist : " + "%.2f".format(distanceGPS(lat1, lon1, lat2, lon2)) + " m"
-            } ?: run {arText.text = "FAILED"}
+            } ?: run { arText.text = "FAILED" }
         }
     }
 
@@ -172,6 +187,26 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         runOnUiThread { geospatialPoseText.text = poseText }
     }
 
+    private fun hasLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestLocationPermission() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+            LOCATION_PERMISSION_REQUEST_CODE
+        )
+    }
+
+
+    private fun showToast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
     private fun placeModelNode() {
         earth?.let {
             var earthAnchor: Anchor? = null
@@ -192,9 +227,46 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
                 modelNode?.anchor = earthAnchor
             }
-        } ?: run{ modelNode?.anchor() }
+        } ?: run { modelNode?.anchor() }
 
         sceneView.planeRenderer.isVisible = false
+    }
+
+    private fun hasCameraPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestCameraPermission() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.CAMERA),
+            CAMERA_PERMISSION_REQUEST_CODE
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
+                showToast("Camera permission granted")
+            } else {
+                showToast("Camera permission is required to access the camera")
+            }
+        }
+        if (requestCode == LOCATION_PERMISSION_REQUEST_CODE) {
+            if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
+                showToast("Location permission granted")
+            } else {
+                showToast("Location permission is required to access the location")
+            }
+        }
     }
 
     private fun newModelNode() {
@@ -241,13 +313,16 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private fun distanceGPS(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val earthRadiusKm = 6371
-        val dLat = Math.toRadians(lat2 - lat1);
-        val dLon = Math.toRadians(lon2 - lon1);
-        val originLat = Math.toRadians(lat1);
-        val destinationLat = Math.toRadians(lat2);
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val originLat = Math.toRadians(lat1)
+        val destinationLat = Math.toRadians(lat2)
 
-        val a = sin(dLat / 2).pow(2.toDouble()) + sin(dLon / 2).pow(2.toDouble()) * cos(originLat) * cos(destinationLat);
-        val c = 2 * asin(sqrt(a));
+        val a =
+            sin(dLat / 2).pow(2.toDouble()) + sin(dLon / 2).pow(2.toDouble()) * cos(originLat) * cos(
+                destinationLat
+            )
+        val c = 2 * asin(sqrt(a))
         return earthRadiusKm * c * 1000
     }
 }
